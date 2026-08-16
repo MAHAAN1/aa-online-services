@@ -12,13 +12,13 @@ import {
   ArrowRight,
   ShieldCheck,
   Clock,
-  LoaderCircle,
   AlertCircle,
   CheckCircle2,
   ChevronRight,
 } from "lucide-react";
 
-const API = import.meta.env.VITE_API_URL;
+const API =
+  import.meta.env.VITE_API_URL;
 
 const serviceIcons = {
   printing: Printer,
@@ -31,11 +31,17 @@ const serviceIcons = {
 };
 
 const formatPrice = (service) => {
-  if (service.pricing_type === "per_unit") {
+  if (
+    service.pricing_type ===
+    "per_unit"
+  ) {
     return `₹${service.price} / ${service.unit}`;
   }
 
-  if (service.pricing_type === "fixed") {
+  if (
+    service.pricing_type ===
+    "fixed"
+  ) {
     return `From ₹${service.price}`;
   }
 
@@ -43,43 +49,71 @@ const formatPrice = (service) => {
 };
 
 export default function Home() {
-  const [services, setServices] = useState([]);
-  const [loadingServices, setLoadingServices] = useState(true);
-  const [serviceError, setServiceError] = useState("");
+  const [
+    services,
+    setServices,
+  ] = useState([]);
+
+  const [
+    loadingServices,
+    setLoadingServices,
+  ] = useState(true);
+
+  const [
+    serviceError,
+    setServiceError,
+  ] = useState("");
 
   useEffect(() => {
     let cancelled = false;
 
-    const loadServices = async () => {
-      try {
-        setLoadingServices(true);
-        setServiceError("");
-
-        const response = await fetch(`${API}/orders/services`);
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch services");
-        }
-
-        const data = await response.json();
-
-        if (!cancelled) {
-          setServices(data.services || []);
-        }
-      } catch (error) {
-        console.error("Services API error:", error);
-
-        if (!cancelled) {
-          setServiceError(
-            "Services are temporarily unavailable. Please try again."
+    const loadServices =
+      async () => {
+        try {
+          setLoadingServices(
+            true
           );
+
+          setServiceError("");
+
+          const response =
+            await fetch(
+              `${API}/orders/services`
+            );
+
+          if (!response.ok) {
+            throw new Error(
+              "Failed to fetch services"
+            );
+          }
+
+          const data =
+            await response.json();
+
+          if (!cancelled) {
+            setServices(
+              data.services || []
+            );
+          }
+        } catch (error) {
+          console.error(
+            "Services API error:",
+            error
+          );
+
+          if (!cancelled) {
+            setServiceError(
+              "Services are temporarily unavailable. Please try again."
+            );
+          }
+        } finally {
+          if (!cancelled) {
+            setLoadingServices(
+              false
+            );
+          }
         }
-      } finally {
-        if (!cancelled) {
-          setLoadingServices(false);
-        }
-      }
-    };
+      };
 
     loadServices();
 
@@ -96,19 +130,35 @@ export default function Home() {
       ===================================================== */}
 
       <header className="fixed inset-x-0 top-0 z-50 px-4 py-3 sm:px-6">
+
         <nav className="glass mx-auto flex max-w-7xl items-center justify-between rounded-2xl px-4 py-3 sm:px-5">
 
-          {/* BRAND */}
+          {/* BRAND / LOGO */}
 
           <Link
             to="/"
             className="flex min-w-0 items-center gap-3"
           >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 text-sm font-black ring-1 ring-white/10">
-              A&A
+
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white/10 p-1.5 ring-1 ring-white/10">
+
+              <img
+                src="/logo.png"
+                alt="A&A Online Services"
+                className="h-full w-full object-contain"
+                onError={(event) => {
+                  event.currentTarget.style.display =
+                    "none";
+
+                  event.currentTarget.parentElement.innerHTML =
+                    '<span class="text-sm font-black">A&A</span>';
+                }}
+              />
+
             </div>
 
             <div className="min-w-0">
+
               <h1 className="truncate text-sm font-bold sm:text-base">
                 A&A Online Services
               </h1>
@@ -116,12 +166,15 @@ export default function Home() {
               <p className="hidden text-xs text-white/45 sm:block">
                 Digital Service & Printing Center
               </p>
+
             </div>
+
           </Link>
 
           {/* NAVIGATION */}
 
           <div className="hidden items-center gap-7 md:flex">
+
             <Link
               to="/"
               className="text-sm text-white/75 transition hover:text-white"
@@ -142,21 +195,26 @@ export default function Home() {
             >
               Track Order
             </Link>
+
           </div>
 
           <Link
             to="/enquiry"
             className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-slate-900 shadow-lg shadow-black/10 transition hover:-translate-y-0.5"
           >
-            <span className="hidden sm:inline">Ask A&A</span>
+            <span className="hidden sm:inline">
+              Ask A&A
+            </span>
+
             <MessageCircle
               size={18}
               className="sm:hidden"
             />
           </Link>
-        </nav>
-      </header>
 
+        </nav>
+
+      </header>
 
       {/* =====================================================
           MAIN
@@ -164,46 +222,46 @@ export default function Home() {
 
       <main className="mx-auto max-w-7xl px-4 pt-24 sm:px-6 lg:px-8">
 
-
         {/* =====================================================
             HERO
         ===================================================== */}
 
         <section className="relative grid min-h-[calc(100vh-6rem)] items-center gap-12 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-20">
 
-          {/* Decorative glow */}
-
           <div className="pointer-events-none absolute -left-40 top-20 h-80 w-80 rounded-full bg-blue-500/10 blur-[120px]" />
 
           <div className="pointer-events-none absolute right-0 top-20 h-96 w-96 rounded-full bg-purple-500/10 blur-[140px]" />
-
 
           {/* HERO CONTENT */}
 
           <div className="relative">
 
             <div className="mb-6 inline-flex items-center gap-2 rounded-full glass px-4 py-2 text-sm text-white/70">
+
               <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,.8)]" />
+
               Your digital service counter
+
             </div>
 
-
             <h2 className="max-w-3xl text-5xl font-black leading-[1.02] tracking-tight sm:text-6xl lg:text-7xl">
+
               Your documents.
               <br />
 
               <span className="gradient-text">
                 Our service.
               </span>
+
             </h2>
 
-
             <p className="mt-7 max-w-2xl text-base leading-7 text-white/60 sm:text-lg sm:leading-8">
-              Send documents for printing, Xerox, lamination and
-              binding. Enquire about applications, scholarships,
-              bookings and other online services — all from one place.
+              Send documents for printing, Xerox,
+              lamination and binding. Enquire about
+              applications, scholarships, bookings
+              and other online services — all from
+              one place.
             </p>
-
 
             {/* ACTIONS */}
 
@@ -214,21 +272,22 @@ export default function Home() {
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-6 py-4 font-bold text-slate-900 shadow-xl shadow-black/20 transition hover:-translate-y-1 hover:shadow-2xl"
               >
                 <Upload size={20} />
+
                 Send Documents
+
                 <ArrowRight size={17} />
               </Link>
-
 
               <Link
                 to="/enquiry"
                 className="glass-button inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-4 font-semibold"
               >
                 <MessageCircle size={20} />
+
                 Ask A&A
               </Link>
 
             </div>
-
 
             {/* TRUST */}
 
@@ -253,10 +312,7 @@ export default function Home() {
 
           </div>
 
-
-          {/* =====================================================
-              QUICK PRINT CARD
-          ===================================================== */}
+          {/* QUICK PRINT CARD */}
 
           <div className="relative">
 
@@ -267,6 +323,7 @@ export default function Home() {
               <div className="flex items-center justify-between px-1 pb-5">
 
                 <div>
+
                   <p className="text-sm text-white/45">
                     Quick service
                   </p>
@@ -274,6 +331,7 @@ export default function Home() {
                   <h3 className="mt-1 text-xl font-bold sm:text-2xl">
                     Send a print request
                   </h3>
+
                 </div>
 
                 <div className="rounded-2xl bg-white/10 p-3 ring-1 ring-white/10">
@@ -282,14 +340,18 @@ export default function Home() {
 
               </div>
 
-
               <Link
                 to="/print"
                 className="group block rounded-[26px] border border-dashed border-white/15 bg-white/[0.025] p-8 text-center transition hover:border-white/25 hover:bg-white/[0.06] sm:p-12"
               >
 
                 <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 transition group-hover:scale-105">
-                  <Upload size={32} className="text-white/75" />
+
+                  <Upload
+                    size={32}
+                    className="text-white/75"
+                  />
+
                 </div>
 
                 <p className="text-lg font-bold">
@@ -307,12 +369,13 @@ export default function Home() {
 
               </Link>
 
-
-              {/* SERVICE TYPES */}
-
               <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
 
-                {["Print", "Lamination", "Binding"].map((item) => (
+                {[
+                  "Print",
+                  "Lamination",
+                  "Binding",
+                ].map((item) => (
                   <div
                     key={item}
                     className="rounded-xl bg-white/[0.06] px-2 py-3 text-center text-xs text-white/45 ring-1 ring-white/5"
@@ -329,7 +392,6 @@ export default function Home() {
 
         </section>
 
-
         {/* =====================================================
             SERVICES
         ===================================================== */}
@@ -339,6 +401,7 @@ export default function Home() {
           <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
 
             <div>
+
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-300">
                 Services
               </p>
@@ -348,8 +411,10 @@ export default function Home() {
               </h2>
 
               <p className="mt-3 max-w-2xl text-white/45">
-                Choose a service and send your request directly to A&A.
+                Choose a service and send your request
+                directly to A&A.
               </p>
+
             </div>
 
             <Link
@@ -362,129 +427,126 @@ export default function Home() {
 
           </div>
 
-
           {/* LOADING */}
 
           {loadingServices && (
-
             <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
 
-              {[1, 2, 3, 4, 5, 6].map((item) => (
-                <div
-                  key={item}
-                  className="glass h-48 animate-pulse rounded-3xl"
-                />
-              ))}
+              {[1, 2, 3, 4, 5, 6].map(
+                (item) => (
+                  <div
+                    key={item}
+                    className="glass h-48 animate-pulse rounded-3xl"
+                  />
+                )
+              )}
 
             </div>
-
           )}
-
 
           {/* ERROR */}
 
-          {!loadingServices && serviceError && (
+          {!loadingServices &&
+            serviceError && (
+              <div className="glass rounded-3xl border-red-400/10 p-8">
 
-            <div className="glass rounded-3xl border-red-400/10 p-8">
+                <div className="flex items-start gap-4">
 
-              <div className="flex items-start gap-4">
+                  <div className="rounded-xl bg-red-400/10 p-3 text-red-300">
+                    <AlertCircle size={22} />
+                  </div>
 
-                <div className="rounded-xl bg-red-400/10 p-3 text-red-300">
-                  <AlertCircle size={22} />
-                </div>
+                  <div>
 
-                <div>
-                  <h3 className="font-semibold">
-                    Services couldn't be loaded
-                  </h3>
+                    <h3 className="font-semibold">
+                      Services couldn't be loaded
+                    </h3>
 
-                  <p className="mt-1 text-sm text-white/45">
-                    {serviceError}
-                  </p>
+                    <p className="mt-1 text-sm text-white/45">
+                      {serviceError}
+                    </p>
 
-                  <button
-                    onClick={() => window.location.reload()}
-                    className="mt-4 rounded-xl bg-white px-4 py-2 text-sm font-bold text-slate-900"
-                  >
-                    Try again
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        window.location.reload()
+                      }
+                      className="mt-4 rounded-xl bg-white px-4 py-2 text-sm font-bold text-slate-900"
+                    >
+                      Try again
+                    </button>
+
+                  </div>
+
                 </div>
 
               </div>
-
-            </div>
-
-          )}
-
+            )}
 
           {/* SERVICES */}
 
           {!loadingServices &&
             !serviceError &&
             services.length > 0 && (
-
               <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
 
-                {services.map((service) => {
+                {services.map(
+                  (service) => {
+                    const Icon =
+                      serviceIcons[
+                        service.category
+                      ] ||
+                      FileText;
 
-                  const Icon =
-                    serviceIcons[service.category] || FileText;
+                    return (
+                      <Link
+                        key={service.id}
+                        to="/print"
+                        className="glass glass-hover group rounded-3xl p-6"
+                      >
 
-                  return (
+                        <div className="flex items-start justify-between">
 
-                    <Link
-                      key={service.id}
-                      to="/print"
-                      className="glass glass-hover group rounded-3xl p-6"
-                    >
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/5">
+                            <Icon size={22} />
+                          </div>
 
-                      <div className="flex items-start justify-between">
+                          <ArrowRight
+                            size={18}
+                            className="text-white/25 transition group-hover:translate-x-1 group-hover:text-white/70"
+                          />
 
-                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/5">
-                          <Icon size={22} />
                         </div>
 
-                        <ArrowRight
-                          size={18}
-                          className="text-white/25 transition group-hover:translate-x-1 group-hover:text-white/70"
-                        />
+                        <h3 className="mt-6 text-lg font-bold">
+                          {service.name}
+                        </h3>
 
-                      </div>
+                        <p className="mt-2 text-sm text-white/45">
+                          {formatPrice(
+                            service
+                          )}
+                        </p>
 
+                        <div className="mt-5 h-px bg-white/10" />
 
-                      <h3 className="mt-6 text-lg font-bold">
-                        {service.name}
-                      </h3>
+                        <p className="mt-4 text-sm font-semibold text-white/65">
+                          Get started
+                        </p>
 
-
-                      <p className="mt-2 text-sm text-white/45">
-                        {formatPrice(service)}
-                      </p>
-
-
-                      <div className="mt-5 h-px bg-white/10" />
-
-
-                      <p className="mt-4 text-sm font-semibold text-white/65">
-                        Get started
-                      </p>
-
-                    </Link>
-
-                  );
-                })}
+                      </Link>
+                    );
+                  }
+                )}
 
               </div>
-
             )}
-
 
           {/* EMPTY */}
 
           {!loadingServices &&
             !serviceError &&
             services.length === 0 && (
-
               <div className="glass rounded-3xl p-10 text-center">
 
                 <FileText
@@ -497,11 +559,9 @@ export default function Home() {
                 </p>
 
               </div>
-
             )}
 
         </section>
-
 
         {/* =====================================================
             HOW IT WORKS
@@ -521,27 +581,31 @@ export default function Home() {
 
           </div>
 
-
           <div className="grid gap-5 md:grid-cols-3">
 
             {[
               {
                 number: "01",
-                title: "Send your request",
-                text: "Upload your documents and select what you need."
+                title:
+                  "Send your request",
+                text:
+                  "Upload your documents and select what you need.",
               },
               {
                 number: "02",
-                title: "A&A processes it",
-                text: "We check your request, confirm the price and process your documents."
+                title:
+                  "A&A processes it",
+                text:
+                  "We check your request, confirm the price and process your documents.",
               },
               {
                 number: "03",
-                title: "Collect your order",
-                text: "Track your order online and collect it from A&A when it's ready."
-              }
+                title:
+                  "Collect your order",
+                text:
+                  "Track your order online and collect it from A&A when it's ready.",
+              },
             ].map((step) => (
-
               <div
                 key={step.number}
                 className="glass glass-hover rounded-3xl p-7"
@@ -560,13 +624,11 @@ export default function Home() {
                 </p>
 
               </div>
-
             ))}
 
           </div>
 
         </section>
-
 
         {/* =====================================================
             TRACK ORDER
@@ -606,7 +668,6 @@ export default function Home() {
 
         </section>
 
-
         {/* =====================================================
             FOOTER
         ===================================================== */}
@@ -615,18 +676,31 @@ export default function Home() {
 
           <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
 
-            <div>
+            <div className="flex items-center gap-3">
 
-              <p className="font-bold">
-                A&A Online Services
-              </p>
+              <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-white/10 p-1.5 ring-1 ring-white/10">
 
-              <p className="mt-1 text-sm text-white/40">
-                Digital Service & Printing Center
-              </p>
+                <img
+                  src="/logo.png"
+                  alt="A&A Online Services"
+                  className="h-full w-full object-contain"
+                />
+
+              </div>
+
+              <div>
+
+                <p className="font-bold">
+                  A&A Online Services
+                </p>
+
+                <p className="mt-1 text-sm text-white/40">
+                  Digital Service & Printing Center
+                </p>
+
+              </div>
 
             </div>
-
 
             <div className="flex flex-wrap gap-5 text-sm text-white/45">
 
@@ -662,6 +736,7 @@ export default function Home() {
         </footer>
 
       </main>
+
     </div>
   );
 }
