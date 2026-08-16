@@ -1,12 +1,52 @@
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
+import { PDFDocument } from "pdf-lib";
+import { unzipSync, strFromU8 } from "fflate";
+
 import { supabase } from "../services/supabase.js";
 import adminAuth from "../middleware/adminAuth.js";
 
 const router = express.Router();
 
 const BUCKET = "aa-order-documents";
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_FILES = 20;
+const MAX_COPIES = 1000;
+
+// ============================================================
+// PRICING
+// ============================================================
+
+const PRINT_PRICE = {
+  bw: {
+    single: 2,
+    double: 3,
+  },
+  color: {
+    single: 5,
+    double: 8,
+  },
+};
+
+const XEROX_PRICE = {
+  bw: {
+    firstPage: 5,
+    additionalPage: 3,
+  },
+  color: {
+    firstPage: 10,
+    additionalPage: 6,
+  },
+};
+
+const LAMINATION_PRICE = 20;
+const SPIRAL_PRICE = 40;
+
+// ============================================================
+// FILE UPLOAD
+// ============================================================
 
 const ALLOWED_TYPES = new Set([
   "application/pdf",
@@ -16,9 +56,6 @@ const ALLOWED_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-const MAX_FILES = 20;
-
 const upload = multer({
   storage: multer.memoryStorage(),
 
@@ -27,7 +64,7 @@ const upload = multer({
     files: MAX_FILES,
   },
 
-  fileFilter: (req, file, cb) => {
+  fileFilter(req, file, cb) {
     if (!ALLOWED_TYPES.has(file.mimetype)) {
       return cb(
         new Error(
@@ -39,325 +76,402 @@ const upload = multer({
     cb(null, true);
   },
 });
-// ==========================================
-// ADMIN AUTHENTICATION
-// Everything below this point is protected.
-// ==========================================
+
+// ============================================================
+// NORMALIZATION
+// ============================================================
+
+const normalizeBoolean = (value) =>
+  value === true ||
+  value === "true" ||
+  value === "1";
+
+const normalizeCopies = (value) => {
+  const copies = Number(value);
+
+  if (!Number.isFinite(copies) || copies < 1) {
+    return 1;
+  }
+
+  return Math.min(
+    MAX_COPIES,
+    Math.floor(copies)
+  );
+};
+
+const normalizeColorMode = (value) =>
+  value === "color" ? "color" : "bw";
+
+const normalizeSides = (value) =>
+  value === "double" ? "double" : "single";
+
+const normalizeServiceType = (value) =>
+  value === "xerox" ? "xerox" : "printing";
+
+const getServiceName = (
+  colorMode,
+  serviceType
+) => {
+  if (serviceType === "xerox") {
+    return colorMode === "color"
+      ? "Colour Xerox"
+      : "B&W Xerox";
+  }
+
+  return colorMode === "color"
+    ? "Colour Printing"
+    : "B&W Printing";
+};
+
+// ============================================================
+// PAGE COUNT
+// ============================================================
+
+const getPdfPageCount = async (buffer) => {
+  const pdf = await PDFDocument.load(buffer, {
+    ignoreEncryption: true,
+  });
+
+  return pdf.getPageCount();
+};
+
+const getDocxPageCount = (buffer) => {
+  try {
+    const files = unzipSync(
+      new Uint8Array(buffer)
+    );
+
+    const appXml =
+      files["docProps/app.xml"];
+
+    if (!appXml) {
+      return null;
+    }
+
+    const xml = strFromU8(appXml);
+
+    const match = xml.match(
+      /<Pages>\s*(\d+)\s*<\/Pages>/i
+    );
+
+    if (!match) {
+      return null;
+    }
+
+    const pages = Number(match[1]);
+
+    return Number.isInteger(pages) && pages > 0
+      ? pages
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const getPageCount = async (file) => {
+  const name =
+    file.originalname.toLowerCase();
+
+  if (
+    file.mimetype === "application/pdf" ||
+    name.endsWith(".pdf")
+  ) {
+    return getPdfPageCount(file.buffer);
+  }
+
+  if (
+    file.mimetype === "image/jpeg" ||
+    file.mimetype === "image/png" ||
+    /\.(jpg|jpeg|png)$/i.test(name)
+  ) {
+    return 1;
+  }
+
+  if (
+    file.mimetype ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    name.endsWith(".docx")
+  ) {
+    return getDocxPageCount(file.buffer);
+  }
+
+  return null;
+};
+
+// ============================================================
+// DOCUMENT PRICE
+// ============================================================
+
+const calculateDocumentPrice = ({
+  pages,
+  copies,
+  colorMode,
+  sides,
+  serviceType,
+}) => {
+  const normalizedPages = Number(pages);
+  const normalizedCopies =
+    normalizeCopies(copies);
+
+  if (
+    !Number.isInteger(normalizedPages) ||
+    normalizedPages < 1
+  ) {
+    return 0;
+  }
+
+  const mode =
+    normalizeColorMode(colorMode);
+
+  const type =
+    normalizeServiceType(serviceType);
+
+  // ----------------------------------------------------------
+  // XEROX
+  // ----------------------------------------------------------
+
+  if (type === "xerox") {
+    const rates = XEROX_PRICE[mode];
+
+    const perCopy =
+      rates.firstPage +
+      Math.max(
+        0,
+        normalizedPages - 1
+      ) *
+        rates.additionalPage;
+
+    return perCopy * normalizedCopies;
+  }
+
+  // ----------------------------------------------------------
+  // PRINTING
+  // ----------------------------------------------------------
+
+  const rates = PRINT_PRICE[mode];
+
+  if (
+    normalizeSides(sides) === "double"
+  ) {
+    const doubleSheets =
+      Math.floor(normalizedPages / 2);
+
+    const singlePages =
+      normalizedPages % 2;
+
+    return (
+      doubleSheets * rates.double +
+      singlePages * rates.single
+    ) * normalizedCopies;
+  }
+
+  return (
+    normalizedPages *
+    rates.single *
+    normalizedCopies
+  );
+};
+
+// ============================================================
+// ORDER TOTAL
+// ============================================================
+
+const calculateOrderTotal = ({
+  documents,
+  lamination,
+  spiralBinding,
+}) => {
+  const documentTotal =
+    documents.reduce(
+      (total, document) =>
+        total +
+        Number(document.amount || 0),
+      0
+    );
+
+  const laminationTotal =
+    normalizeBoolean(lamination)
+      ? documents.reduce(
+          (total, document) =>
+            total +
+            Number(document.pages || 0) *
+              normalizeCopies(
+                document.copies
+              ) *
+              LAMINATION_PRICE,
+          0
+        )
+      : 0;
+
+  const spiralTotal =
+    normalizeBoolean(spiralBinding)
+      ? SPIRAL_PRICE
+      : 0;
+
+  return (
+    documentTotal +
+    laminationTotal +
+    spiralTotal
+  );
+};
+
+// ============================================================
+// PARSE CUSTOMER DOCUMENT OPTIONS
+// ============================================================
+
+const parseDocumentOptions = (value) => {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed =
+      typeof value === "string"
+        ? JSON.parse(value)
+        : value;
+
+    return Array.isArray(parsed)
+      ? parsed
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+const getDocumentOption = (
+  options,
+  index,
+  file
+) => {
+  const byIndex = options[index];
+
+  if (
+    byIndex &&
+    typeof byIndex === "object"
+  ) {
+    return byIndex;
+  }
+
+  return (
+    options.find(
+      (item) =>
+        item &&
+        String(
+          item.original_name || ""
+        ).trim() ===
+          String(
+            file.originalname || ""
+          ).trim()
+    ) || {}
+  );
+};
+
+// ============================================================
+// ADMIN AUTH
+// ============================================================
 
 router.use("/admin", adminAuth);
 
-// ==========================================
-// ADMIN - GET ALL ORDERS
-// ==========================================
+// ============================================================
+// ADMIN - ALL ORDERS
+// ============================================================
 
-router.get("/admin/all", async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("orders")
-      .select(`
-        id,
-        order_number,
-        customer_name,
-        phone,
-        service,
-        copies,
-        binding,
-        notes,
-        status,
-        amount,
-        payment_status,
-        created_at,
-        updated_at,
-        document_path
-      `)
-      .order("created_at", {
-        ascending: false,
-      });
-
-    if (error) {
-      console.error("Admin orders error:", error);
-
-      return res.status(500).json({
-        status: "error",
-        message: "Unable to load orders.",
-      });
-    }
-
-    return res.json({
-      status: "ok",
-      orders: data || [],
-    });
-  } catch (error) {
-    console.error("Admin orders error:", error);
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error while loading orders.",
-    });
-  }
-});
-
-// ==========================================
-// ADMIN - UPDATE ORDER STATUS
-// ==========================================
-
-router.patch(
-  "/admin/:orderId/status",
+router.get(
+  "/admin/all",
   async (req, res) => {
     try {
-      const { orderId } = req.params;
-      const { status } = req.body || {};
-
-      const allowedStatuses = [
-        "received",
-        "reviewing",
-        "awaiting_payment",
-        "processing",
-        "ready",
-        "completed",
-        "needs_customer_action",
-        "cancelled",
-      ];
-
-      if (!allowedStatuses.includes(status)) {
-        return res.status(400).json({
-          status: "error",
-          message: "Invalid order status.",
-        });
-      }
-
       const {
         data,
         error,
       } = await supabase
         .from("orders")
-        .update({
+        .select(`
+          id,
+          order_number,
+          customer_name,
+          phone,
+          customer_email,
+          service,
+          copies,
+          color_mode,
+          sides,
+          binding,
+          notes,
           status,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", orderId)
-        .select()
-        .single();
+          amount,
+          payment_status,
+          paid_amount,
+          razorpay_order_id,
+          razorpay_payment_id,
+          paid_at,
+          created_at,
+          updated_at,
+          document_path
+        `)
+        .order("created_at", {
+          ascending: false,
+        });
 
       if (error) {
         console.error(
-          "Order status update error:",
+          "Admin orders error:",
           error
         );
 
         return res.status(500).json({
           status: "error",
           message:
-            "Unable to update order status.",
+            "Unable to load orders.",
         });
       }
 
       return res.json({
         status: "ok",
-        message: "Order status updated.",
-        order: data,
+        orders: data || [],
       });
     } catch (error) {
       console.error(
-        "Order status update error:",
+        "Admin orders error:",
         error
       );
 
       return res.status(500).json({
         status: "error",
         message:
-          "Server error while updating order.",
+          "Server error while loading orders.",
       });
     }
   }
 );
 
-// ==========================================
-// GET SERVICES
-// ==========================================
-
-router.get("/services", async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("services")
-      .select("*")
-      .eq("active", true)
-      .order("created_at", {
-        ascending: true,
-      });
-
-    if (error) {
-      console.error("Services error:", error);
-
-      return res.status(500).json({
-        status: "error",
-        message: "Unable to load services",
-      });
-    }
-
-    return res.json({
-      status: "ok",
-      services: data || [],
-    });
-  } catch (error) {
-    console.error("Services route error:", error);
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error",
-    });
-  }
-});
-
-// ==========================================
-// TEST ROUTE
-// ==========================================
-
-router.get("/test", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Order route is working",
-  });
-});
-
-// ==========================================
-// ADMIN - VIEW FIRST DOCUMENT OF ORDER
-// ==========================================
-
-router.get(
-  "/admin/:orderId/document",
-  async (req, res) => {
-    try {
-      const { orderId } = req.params;
-
-      // ==========================================
-      // GET ORDER
-      // ==========================================
-
-      const {
-        data: order,
-        error: orderError,
-      } = await supabase
-        .from("orders")
-        .select(
-          "id, order_number, document_path"
-        )
-        .eq("id", orderId)
-        .maybeSingle();
-
-      if (orderError) {
-        console.error(
-          "Document order lookup error:",
-          orderError
-        );
-
-        return res.status(500).json({
-          status: "error",
-          message: "Unable to find order.",
-          database_error: orderError.message,
-        });
-      }
-
-      if (!order) {
-        return res.status(404).json({
-          status: "error",
-          message: "Order not found.",
-        });
-      }
-
-      // ==========================================
-      // CHECK DOCUMENT
-      // ==========================================
-
-      if (!order.document_path) {
-        return res.status(404).json({
-          status: "error",
-          message:
-            "No document is attached to this order.",
-        });
-      }
-
-      // ==========================================
-      // CREATE TEMPORARY SIGNED URL
-      // ==========================================
-
-      const {
-        data: signedUrl,
-        error: signedUrlError,
-      } = await supabase.storage
-        .from(BUCKET)
-        .createSignedUrl(
-          order.document_path,
-          60 * 10
-        );
-
-      if (signedUrlError) {
-        console.error(
-          "Signed URL error:",
-          signedUrlError
-        );
-
-        return res.status(500).json({
-          status: "error",
-          message:
-            "Unable to generate document link.",
-          storage_error:
-            signedUrlError.message,
-        });
-      }
-
-      return res.json({
-        status: "ok",
-        order_number:
-          order.order_number,
-        document_path:
-          order.document_path,
-        url:
-          signedUrl.signedUrl,
-        expires_in: 600,
-      });
-    } catch (error) {
-      console.error(
-        "Document route error:",
-        error
-      );
-
-      return res.status(500).json({
-        status: "error",
-        message:
-          "Unable to open document.",
-      });
-    }
-  }
-);
-
-// ==========================================
+// ============================================================
 // ADMIN - GET ALL DOCUMENTS FOR ORDER
-// ==========================================
+// ============================================================
 
 router.get(
   "/admin/:orderId/documents",
   async (req, res) => {
     try {
-      const { orderId } = req.params;
-
-      console.log(
-        "Loading documents for order:",
-        orderId
-      );
-
-      // ==========================================
-      // VERIFY ORDER EXISTS
-      // ==========================================
+      const { orderId } =
+        req.params;
 
       const {
         data: order,
         error: orderError,
       } = await supabase
         .from("orders")
-        .select(
-          "id, order_number"
-        )
+        .select(`
+          id,
+          order_number,
+          amount,
+          payment_status,
+          paid_amount,
+          razorpay_order_id,
+          razorpay_payment_id,
+          paid_at,
+          lamination,
+          spiral_binding
+        `)
         .eq("id", orderId)
         .maybeSingle();
 
@@ -384,28 +498,35 @@ router.get(
         });
       }
 
-      // ==========================================
-      // GET DOCUMENTS
-      // ==========================================
-
+      // IMPORTANT:
+      // Read the ACTUAL saved customer request
+      // directly from order_documents.
       const {
         data: documents,
         error: documentsError,
       } = await supabase
         .from("order_documents")
-        .select(
-          `
+        .select(`
           id,
           order_id,
           original_name,
           storage_path,
           file_type,
           file_size,
+          pages,
+          copies,
+          service_type,
+          service_name,
+          color_mode,
+          sides,
+          amount,
           delete_at,
           created_at
-          `
+        `)
+        .eq(
+          "order_id",
+          orderId
         )
-        .eq("order_id", orderId)
         .order("created_at", {
           ascending: true,
         });
@@ -422,31 +543,157 @@ router.get(
             "Unable to load order documents.",
           database_error:
             documentsError.message,
-          database_code:
-            documentsError.code,
-          database_details:
-            documentsError.details,
-          database_hint:
-            documentsError.hint,
         });
       }
 
-      console.log(
-        `Documents found for ${order.order_number}:`,
-        documents?.length || 0
-      );
+      const safeDocuments =
+        (documents || []).map(
+          (document) => ({
+            id: document.id,
+            order_id:
+              document.order_id,
+
+            original_name:
+              document.original_name,
+
+            storage_path:
+              document.storage_path,
+
+            file_type:
+              document.file_type,
+
+            file_size:
+              document.file_size,
+
+            pages:
+              Number(document.pages) || 0,
+
+            copies:
+              normalizeCopies(
+                document.copies
+              ),
+
+            service_type:
+              normalizeServiceType(
+                document.service_type
+              ),
+
+            service_name:
+              document.service_name ||
+              getServiceName(
+                document.color_mode,
+                document.service_type
+              ),
+
+            color_mode:
+              normalizeColorMode(
+                document.color_mode
+              ),
+
+            sides:
+              normalizeSides(
+                document.sides
+              ),
+
+            amount:
+              Number(document.amount) || 0,
+
+            delete_at:
+              document.delete_at,
+
+            created_at:
+              document.created_at,
+          })
+        );
+
+      const totalPages =
+        safeDocuments.reduce(
+          (total, document) =>
+            total +
+            Number(document.pages || 0),
+          0
+        );
+
+      const documentCharges =
+        safeDocuments.reduce(
+          (total, document) =>
+            total +
+            Number(document.amount || 0),
+          0
+        );
+
+      const laminationCharges =
+        normalizeBoolean(
+          order.lamination
+        )
+          ? safeDocuments.reduce(
+              (total, document) =>
+                total +
+                document.pages *
+                  document.copies *
+                  LAMINATION_PRICE,
+              0
+            )
+          : 0;
+
+      const spiralCharges =
+        normalizeBoolean(
+          order.spiral_binding
+        )
+          ? SPIRAL_PRICE
+          : 0;
+
+      const calculatedDocumentTotal =
+        documentCharges +
+        laminationCharges +
+        spiralCharges;
 
       return res.json({
         status: "ok",
 
         order: {
           id: order.id,
+
           order_number:
             order.order_number,
+
+          amount:
+            Number(order.amount) ||
+            calculatedDocumentTotal,
+
+          payment_status:
+            order.payment_status,
+
+          paid_amount:
+            Number(order.paid_amount) || 0,
+
+          razorpay_order_id:
+            order.razorpay_order_id,
+
+          razorpay_payment_id:
+            order.razorpay_payment_id,
+
+          paid_at:
+            order.paid_at,
+
+          total_pages:
+            totalPages,
+
+          document_charges:
+            documentCharges,
+
+          lamination_charges:
+            laminationCharges,
+
+          spiral_charges:
+            spiralCharges,
+
+          calculated_document_total:
+            calculatedDocumentTotal,
         },
 
         documents:
-          documents || [],
+          safeDocuments,
       });
     } catch (error) {
       console.error(
@@ -463,59 +710,53 @@ router.get(
   }
 );
 
-// ==========================================
+// ============================================================
 // ADMIN - VIEW SPECIFIC DOCUMENT
-// ==========================================
+// ============================================================
 
 router.get(
   "/admin/document/:documentId",
   async (req, res) => {
     try {
-      const { documentId } = req.params;
-
-      console.log(
-        "Opening document:",
-        documentId
-      );
-
-      // ==========================================
-      // GET DOCUMENT
-      // ==========================================
+      const {
+        documentId,
+      } = req.params;
 
       const {
         data: document,
-        error: documentError,
+        error,
       } = await supabase
         .from("order_documents")
-        .select(
-          `
+        .select(`
           id,
           order_id,
           original_name,
           storage_path,
           file_type,
           file_size,
+          pages,
+          copies,
+          service_type,
+          service_name,
+          color_mode,
+          sides,
+          amount,
           delete_at,
           created_at
-          `
-        )
+        `)
         .eq("id", documentId)
         .maybeSingle();
 
-      if (documentError) {
+      if (error) {
         console.error(
           "Document lookup error:",
-          documentError
+          error
         );
 
         return res.status(500).json({
           status: "error",
           message:
             "Unable to find document.",
-          database_error:
-            documentError.message,
-          database_code:
-            documentError.code,
         });
       }
 
@@ -527,10 +768,6 @@ router.get(
         });
       }
 
-      // ==========================================
-      // CHECK STORAGE PATH
-      // ==========================================
-
       if (!document.storage_path) {
         return res.status(404).json({
           status: "error",
@@ -539,10 +776,6 @@ router.get(
         });
       }
 
-      // ==========================================
-      // CREATE SIGNED URL
-      // ==========================================
-
       const {
         data: signedData,
         error: signedError,
@@ -550,10 +783,13 @@ router.get(
         .from(BUCKET)
         .createSignedUrl(
           document.storage_path,
-          60 * 10
+          600
         );
 
-      if (signedError) {
+      if (
+        signedError ||
+        !signedData?.signedUrl
+      ) {
         console.error(
           "Signed URL error:",
           signedError
@@ -563,29 +799,14 @@ router.get(
           status: "error",
           message:
             "Unable to generate document link.",
-          storage_error:
-            signedError.message,
         });
       }
-
-      if (!signedData?.signedUrl) {
-        return res.status(500).json({
-          status: "error",
-          message:
-            "Document URL was not generated.",
-        });
-      }
-
-      // ==========================================
-      // RESPONSE
-      // ==========================================
 
       return res.json({
         status: "ok",
 
         document: {
-          id:
-            document.id,
+          id: document.id,
 
           order_id:
             document.order_id,
@@ -599,6 +820,35 @@ router.get(
           file_size:
             document.file_size,
 
+          pages:
+            Number(document.pages) || 0,
+
+          copies:
+            normalizeCopies(
+              document.copies
+            ),
+
+          service_type:
+            normalizeServiceType(
+              document.service_type
+            ),
+
+          service_name:
+            document.service_name,
+
+          color_mode:
+            normalizeColorMode(
+              document.color_mode
+            ),
+
+          sides:
+            normalizeSides(
+              document.sides
+            ),
+
+          amount:
+            Number(document.amount) || 0,
+
           created_at:
             document.created_at,
         },
@@ -606,8 +856,7 @@ router.get(
         url:
           signedData.signedUrl,
 
-        expires_in:
-          600,
+        expires_in: 600,
       });
     } catch (error) {
       console.error(
@@ -624,16 +873,148 @@ router.get(
   }
 );
 
-// ==========================================
+// ============================================================
+// ADMIN - VIEW FIRST DOCUMENT
+// ============================================================
+
+router.get(
+  "/admin/:orderId/document",
+  async (req, res) => {
+    try {
+      const { orderId } =
+        req.params;
+
+      const {
+        data: document,
+        error,
+      } = await supabase
+        .from("order_documents")
+        .select(`
+          id,
+          order_id,
+          original_name,
+          storage_path,
+          pages,
+          copies,
+          service_type,
+          service_name,
+          color_mode,
+          sides,
+          amount
+        `)
+        .eq(
+          "order_id",
+          orderId
+        )
+        .order("created_at", {
+          ascending: true,
+        })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        return res.status(500).json({
+          status: "error",
+          message:
+            "Unable to find document.",
+        });
+      }
+
+      if (!document) {
+        return res.status(404).json({
+          status: "error",
+          message:
+            "No document is attached to this order.",
+        });
+      }
+
+      const {
+        data: signedData,
+        error: signedError,
+      } = await supabase.storage
+        .from(BUCKET)
+        .createSignedUrl(
+          document.storage_path,
+          600
+        );
+
+      if (
+        signedError ||
+        !signedData?.signedUrl
+      ) {
+        return res.status(500).json({
+          status: "error",
+          message:
+            "Unable to generate document link.",
+        });
+      }
+
+      return res.json({
+        status: "ok",
+
+        order_id:
+          document.order_id,
+
+        document: {
+          id: document.id,
+          original_name:
+            document.original_name,
+          pages:
+            Number(document.pages) || 0,
+          copies:
+            normalizeCopies(
+              document.copies
+            ),
+          service_type:
+            normalizeServiceType(
+              document.service_type
+            ),
+          service_name:
+            document.service_name,
+          color_mode:
+            normalizeColorMode(
+              document.color_mode
+            ),
+          sides:
+            normalizeSides(
+              document.sides
+            ),
+          amount:
+            Number(document.amount) || 0,
+        },
+
+        url:
+          signedData.signedUrl,
+
+        expires_in: 600,
+      });
+    } catch (error) {
+      console.error(
+        "View order document error:",
+        error
+      );
+
+      return res.status(500).json({
+        status: "error",
+        message:
+          "Unable to open document.",
+      });
+    }
+  }
+);
+
+// ============================================================
 // CREATE ORDER + UPLOAD DOCUMENTS
-// ==========================================
+// ============================================================
 
 router.post(
   "/create",
-  upload.array("documents", MAX_FILES),
+  upload.array(
+    "documents",
+    MAX_FILES
+  ),
   async (req, res) => {
     const uploadedPaths = [];
-    const uploadedDocuments = [];
 
     try {
       const {
@@ -650,11 +1031,14 @@ router.post(
         notes = "",
       } = req.body;
 
-      // ==========================================
-      // VALIDATE CUSTOMER
-      // ==========================================
+      // --------------------------------------------------------
+      // BASIC VALIDATION
+      // --------------------------------------------------------
 
-      if (!customer_name || !phone) {
+      if (
+        !customer_name?.trim() ||
+        !phone?.trim()
+      ) {
         return res.status(400).json({
           status: "error",
           message:
@@ -662,21 +1046,17 @@ router.post(
         });
       }
 
-      // ==========================================
-      // VALIDATE PHONE
-      // ==========================================
-
-      if (!/^[0-9]{10}$/.test(phone)) {
+      if (
+        !/^[0-9]{10}$/.test(
+          phone.trim()
+        )
+      ) {
         return res.status(400).json({
           status: "error",
           message:
             "Please enter a valid 10-digit phone number.",
         });
       }
-
-      // ==========================================
-      // VALIDATE EMAIL
-      // ==========================================
 
       if (
         customer_email &&
@@ -691,10 +1071,6 @@ router.post(
         });
       }
 
-      // ==========================================
-      // VALIDATE FILES
-      // ==========================================
-
       if (
         !req.files ||
         req.files.length === 0
@@ -706,45 +1082,140 @@ router.post(
         });
       }
 
-      if (req.files.length > MAX_FILES) {
-        return res.status(400).json({
-          status: "error",
-          message:
-            `Maximum ${MAX_FILES} documents are allowed.`,
-        });
-      }
+      // --------------------------------------------------------
+      // CUSTOMER'S EXACT PER-DOCUMENT REQUEST
+      // --------------------------------------------------------
 
-      // ==========================================
-      // GENERATE ORDER NUMBER
-      // ==========================================
+      const documentOptions =
+        parseDocumentOptions(
+          req.body?.document_options
+        );
 
-      const randomPart = crypto
-        .randomBytes(3)
-        .toString("hex")
-        .toUpperCase();
+      // --------------------------------------------------------
+      // ORDER NUMBER
+      // --------------------------------------------------------
 
-      const datePart = new Date()
-        .toISOString()
-        .slice(0, 10)
-        .replaceAll("-", "");
+      const randomPart =
+        crypto
+          .randomBytes(3)
+          .toString("hex")
+          .toUpperCase();
+
+      const datePart =
+        new Date()
+          .toISOString()
+          .slice(0, 10)
+          .replaceAll("-", "");
 
       const orderNumber =
         `AA-${datePart}-${randomPart}`;
 
-      // ==========================================
-      // DELETE AFTER 24 HOURS
-      // ==========================================
+      const deleteAt =
+        new Date(
+          Date.now() +
+            24 * 60 * 60 * 1000
+        ).toISOString();
 
-      const deleteAt = new Date(
-        Date.now() +
-          24 * 60 * 60 * 1000
-      ).toISOString();
+      const uploadedDocuments = [];
 
-      // ==========================================
-      // UPLOAD ALL DOCUMENTS
-      // ==========================================
+      // --------------------------------------------------------
+      // PROCESS EACH DOCUMENT
+      // --------------------------------------------------------
 
-      for (const file of req.files) {
+      for (
+        let index = 0;
+        index < req.files.length;
+        index++
+      ) {
+        const file =
+          req.files[index];
+
+        const option =
+          getDocumentOption(
+            documentOptions,
+            index,
+            file
+          );
+
+        // ------------------------------------------------------
+        // SERVER-AUTHORITATIVE PAGE COUNT
+        // ------------------------------------------------------
+
+        const pages =
+          await getPageCount(file);
+
+        if (
+          !Number.isInteger(pages) ||
+          pages < 1
+        ) {
+          throw new Error(
+            `${file.originalname}: unable to determine the page count.`
+          );
+        }
+
+        // ------------------------------------------------------
+        // EXACT CUSTOMER REQUEST
+        // ------------------------------------------------------
+
+        const documentCopies =
+          normalizeCopies(
+            option.copies ??
+              copies
+          );
+
+        const documentColor =
+          normalizeColorMode(
+            option.color_mode ??
+              color_mode
+          );
+
+        const documentSides =
+          normalizeSides(
+            option.sides ??
+              sides
+          );
+
+        const documentServiceType =
+          normalizeServiceType(
+            option.service_type
+          );
+
+        const documentServiceName =
+          getServiceName(
+            documentColor,
+            documentServiceType
+          );
+
+        // ------------------------------------------------------
+        // PRICE
+        // ------------------------------------------------------
+
+        const amount =
+          calculateDocumentPrice({
+            pages,
+            copies:
+              documentCopies,
+            colorMode:
+              documentColor,
+            sides:
+              documentSides,
+            serviceType:
+              documentServiceType,
+          });
+
+        if (
+          !Number.isFinite(amount) ||
+          amount <= 0
+        ) {
+          throw new Error(
+            `${file.originalname}: unable to calculate document price.`
+          );
+        }
+
+        // ------------------------------------------------------
+        // STORAGE
+        // ------------------------------------------------------
+
         const safeFileName =
           file.originalname.replace(
             /[^a-zA-Z0-9._-]/g,
@@ -752,7 +1223,7 @@ router.post(
           );
 
         const storagePath =
-          `${orderNumber}/${Date.now()}-${safeFileName}`;
+          `${orderNumber}/${Date.now()}-${index}-${safeFileName}`;
 
         const {
           error: uploadError,
@@ -770,46 +1241,17 @@ router.post(
             }
           );
 
-        // ==========================================
-        // STORAGE UPLOAD ERROR
-        // ==========================================
-
         if (uploadError) {
-          console.error(
-            "Document upload error:",
-            uploadError
-          );
-
-          if (
-            uploadedPaths.length > 0
-          ) {
-            await supabase.storage
-              .from(BUCKET)
-              .remove(
-                uploadedPaths
-              );
-          }
-
-          return res.status(500).json({
-            status: "error",
-            message:
-              "Unable to upload document.",
-            storage_error:
-              uploadError.message,
-          });
+          throw uploadError;
         }
-
-        // ==========================================
-        // SAVE STORAGE PATH
-        // ==========================================
 
         uploadedPaths.push(
           storagePath
         );
 
-        // ==========================================
-        // SAVE DOCUMENT INFORMATION
-        // ==========================================
+        // ------------------------------------------------------
+        // STORE COMPLETE DOCUMENT REQUEST
+        // ------------------------------------------------------
 
         uploadedDocuments.push({
           original_name:
@@ -824,21 +1266,64 @@ router.post(
           file_size:
             file.size || null,
 
+          pages,
+
+          copies:
+            documentCopies,
+
+          service_type:
+            documentServiceType,
+
+          service_name:
+            documentServiceName,
+
+          color_mode:
+            documentColor,
+
+          sides:
+            documentSides,
+
+          amount,
+
           delete_at:
             deleteAt,
         });
       }
 
-      // ==========================================
-      // FIRST DOCUMENT PATH
-      // ==========================================
+      // --------------------------------------------------------
+      // TOTAL ORDER AMOUNT
+      // --------------------------------------------------------
 
-      const documentPath =
-        uploadedPaths[0] || null;
+      const totalAmount =
+        calculateOrderTotal({
+          documents:
+            uploadedDocuments,
 
-      // ==========================================
+          lamination,
+
+          spiralBinding:
+            spiral_binding,
+        });
+
+      if (
+        !Number.isFinite(totalAmount) ||
+        totalAmount <= 0
+      ) {
+        throw new Error(
+          "Unable to calculate a valid order amount."
+        );
+      }
+
+      // --------------------------------------------------------
+      // FIRST DOCUMENT
+      // --------------------------------------------------------
+
+      const firstDocument =
+        uploadedDocuments[0];
+
+      // --------------------------------------------------------
       // CREATE ORDER
-      // ==========================================
+      // --------------------------------------------------------
 
       const {
         data: order,
@@ -863,26 +1348,26 @@ router.post(
             service_id || null,
 
           service:
-            service_name ||
-            "Document Service",
+            firstDocument.service_name,
 
           copies:
-            Math.max(
-              1,
-              Number(copies) || 1
-            ),
+            firstDocument.copies,
 
           color_mode:
-            color_mode,
+            firstDocument.color_mode,
 
           sides:
-            sides,
+            firstDocument.sides,
 
           lamination:
-            lamination === "true",
+            normalizeBoolean(
+              lamination
+            ),
 
           spiral_binding:
-            spiral_binding === "true",
+            normalizeBoolean(
+              spiral_binding
+            ),
 
           notes:
             notes?.trim() || "",
@@ -893,8 +1378,11 @@ router.post(
           payment_status:
             "pending",
 
+          amount:
+            totalAmount,
+
           document_path:
-            documentPath,
+            firstDocument.storage_path,
 
           delete_at:
             deleteAt,
@@ -902,151 +1390,93 @@ router.post(
         .select()
         .single();
 
-      // ==========================================
-      // ORDER CREATION ERROR
-      // ==========================================
-
       if (orderError) {
-        console.error(
-          "Order creation error:",
-          orderError
-        );
-
-        if (
-          uploadedPaths.length > 0
-        ) {
-          await supabase.storage
-            .from(BUCKET)
-            .remove(
-              uploadedPaths
-            );
-        }
-
-        return res.status(500).json({
-          status: "error",
-
-          message:
-            "Unable to create order.",
-
-          database_error:
-            orderError.message,
-
-          database_code:
-            orderError.code,
-
-          database_details:
-            orderError.details,
-
-          database_hint:
-            orderError.hint,
-        });
+        throw orderError;
       }
 
-      // ==========================================
-      // SAVE ALL DOCUMENTS
-      // ==========================================
+      // --------------------------------------------------------
+      // SAVE COMPLETE DOCUMENT ROWS
+      // --------------------------------------------------------
+
+      const documentRows =
+        uploadedDocuments.map(
+          (document) => ({
+            order_id:
+              order.id,
+
+            original_name:
+              document.original_name,
+
+            storage_path:
+              document.storage_path,
+
+            file_type:
+              document.file_type,
+
+            file_size:
+              document.file_size,
+
+            // THESE WERE MISSING BEFORE
+            pages:
+              document.pages,
+
+            copies:
+              document.copies,
+
+            service_type:
+              document.service_type,
+
+            service_name:
+              document.service_name,
+
+            color_mode:
+              document.color_mode,
+
+            sides:
+              document.sides,
+
+            amount:
+              document.amount,
+
+            delete_at:
+              document.delete_at,
+          })
+        );
 
       const {
-        error: documentsError,
+        data: savedDocuments,
+        error:
+          documentsError,
       } = await supabase
         .from("order_documents")
         .insert(
-          uploadedDocuments.map(
-            (document) => ({
-              order_id:
-                order.id,
-
-              original_name:
-                document.original_name,
-
-              storage_path:
-                document.storage_path,
-
-              file_type:
-                document.file_type,
-
-              file_size:
-                document.file_size,
-
-              delete_at:
-                document.delete_at,
-            })
-          )
-        );
-
-      // ==========================================
-      // DOCUMENT DATABASE ERROR
-      // ==========================================
+          documentRows
+        )
+        .select(`
+          id,
+          order_id,
+          original_name,
+          storage_path,
+          file_type,
+          file_size,
+          pages,
+          copies,
+          service_type,
+          service_name,
+          color_mode,
+          sides,
+          amount,
+          delete_at,
+          created_at
+        `);
 
       if (documentsError) {
-        console.error(
-          "Order documents database error:",
-          documentsError
-        );
-
-        // ----------------------------------------
-        // DELETE STORAGE FILES
-        // ----------------------------------------
-
-        if (
-          uploadedPaths.length > 0
-        ) {
-          try {
-            await supabase.storage
-              .from(BUCKET)
-              .remove(
-                uploadedPaths
-              );
-          } catch (cleanupError) {
-            console.error(
-              "Storage cleanup error:",
-              cleanupError
-            );
-          }
-        }
-
-        // ----------------------------------------
-        // DELETE ORDER
-        // ----------------------------------------
-
-        try {
-          await supabase
-            .from("orders")
-            .delete()
-            .eq(
-              "id",
-              order.id
-            );
-        } catch (cleanupError) {
-          console.error(
-            "Order cleanup error:",
-            cleanupError
-          );
-        }
-
-        return res.status(500).json({
-          status: "error",
-
-          message:
-            "Unable to save order documents.",
-
-          database_error:
-            documentsError.message,
-
-          database_code:
-            documentsError.code,
-
-          database_details:
-            documentsError.details,
-
-          database_hint:
-            documentsError.hint,
-        });
+        throw documentsError;
       }
 
-      // ==========================================
+      // --------------------------------------------------------
       // SUCCESS
-      // ==========================================
+      // --------------------------------------------------------
 
       return res.status(201).json({
         status: "ok",
@@ -1057,21 +1487,53 @@ router.post(
         order,
 
         documents:
-          uploadedDocuments,
+          savedDocuments || [],
+
+        pricing: {
+          document_total:
+            uploadedDocuments.reduce(
+              (sum, document) =>
+                sum +
+                Number(
+                  document.amount || 0
+                ),
+              0
+            ),
+
+          lamination_total:
+            normalizeBoolean(
+              lamination
+            )
+              ? uploadedDocuments.reduce(
+                  (sum, document) =>
+                    sum +
+                    document.pages *
+                      document.copies *
+                      LAMINATION_PRICE,
+                  0
+                )
+              : 0,
+
+          spiral_total:
+            normalizeBoolean(
+              spiral_binding
+            )
+              ? SPIRAL_PRICE
+              : 0,
+
+          final_amount:
+            totalAmount,
+        },
       });
     } catch (error) {
-      // ==========================================
-      // UNEXPECTED ERROR
-      // ==========================================
-
       console.error(
         "Create order error:",
         error
       );
 
-      // ----------------------------------------
+      // --------------------------------------------------------
       // CLEANUP STORAGE
-      // ----------------------------------------
+      // --------------------------------------------------------
 
       if (
         uploadedPaths.length > 0
@@ -1084,7 +1546,7 @@ router.post(
             );
         } catch (cleanupError) {
           console.error(
-            "Document cleanup error:",
+            "Storage cleanup error:",
             cleanupError
           );
         }
@@ -1093,22 +1555,27 @@ router.post(
       return res.status(500).json({
         status: "error",
         message:
+          error?.message ||
           "Unable to create order.",
-        error:
-          error.message,
       });
     }
   }
 );
 
-// ==========================================
+// ============================================================
 // MULTER ERROR HANDLER
-// ==========================================
+// ============================================================
 
 router.use(
-  (error, req, res, next) => {
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
     if (
-      error instanceof multer.MulterError
+      error instanceof
+      multer.MulterError
     ) {
       if (
         error.code ===
@@ -1146,7 +1613,7 @@ router.use(
 
     if (error) {
       console.error(
-        "Multer/upload error:",
+        "Upload error:",
         error
       );
 
@@ -1162,9 +1629,9 @@ router.use(
   }
 );
 
-// ==========================================
+// ============================================================
 // TRACK ORDER
-// ==========================================
+// ============================================================
 
 router.get(
   "/track",
@@ -1198,9 +1665,15 @@ router.get(
           phone,
           service,
           copies,
+          color_mode,
+          sides,
           status,
           amount,
           payment_status,
+          paid_amount,
+          razorpay_order_id,
+          razorpay_payment_id,
+          paid_at,
           created_at,
           updated_at
         `)
@@ -1216,7 +1689,7 @@ router.get(
 
       if (error) {
         console.error(
-          "Track order database error:",
+          "Track order error:",
           error
         );
 
@@ -1224,8 +1697,6 @@ router.get(
           status: "error",
           message:
             "Unable to retrieve order.",
-          error:
-            error.message,
         });
       }
 
@@ -1237,48 +1708,10 @@ router.get(
         });
       }
 
-      console.log(
-        "Tracked order:",
-        order
-      );
-
       return res.json({
         status: "ok",
 
-        order: {
-          id:
-            order.id,
-
-          order_number:
-            order.order_number,
-
-          customer_name:
-            order.customer_name,
-
-          phone:
-            order.phone,
-
-          service:
-            order.service,
-
-          copies:
-            order.copies,
-
-          status:
-            order.status,
-
-          amount:
-            order.amount,
-
-          payment_status:
-            order.payment_status,
-
-          created_at:
-            order.created_at,
-
-          updated_at:
-            order.updated_at,
-        },
+        order,
       });
     } catch (error) {
       console.error(
@@ -1295,77 +1728,9 @@ router.get(
   }
 );
 
-// ==========================================
-// ADMIN - GET ALL ORDERS
-// ==========================================
-
-router.get(
-  "/admin/all",
-  async (req, res) => {
-    try {
-      const {
-        data,
-        error,
-      } = await supabase
-        .from("orders")
-        .select(`
-          id,
-          order_number,
-          customer_name,
-          phone,
-          service,
-          copies,
-          binding,
-          notes,
-          status,
-          amount,
-          payment_status,
-          created_at,
-          updated_at,
-          document_path
-        `)
-        .order("created_at", {
-          ascending: false,
-        });
-
-      if (error) {
-        console.error(
-          "Admin orders error:",
-          error
-        );
-
-        return res.status(500).json({
-          status: "error",
-          message:
-            "Unable to load orders.",
-          database_error:
-            error.message,
-        });
-      }
-
-      return res.json({
-        status: "ok",
-        orders:
-          data || [],
-      });
-    } catch (error) {
-      console.error(
-        "Admin orders error:",
-        error
-      );
-
-      return res.status(500).json({
-        status: "error",
-        message:
-          "Server error while loading orders.",
-      });
-    }
-  }
-);
-
-// ==========================================
+// ============================================================
 // ADMIN - UPDATE ORDER STATUS
-// ==========================================
+// ============================================================
 
 router.patch(
   "/admin/:orderId/status",
@@ -1390,10 +1755,6 @@ router.patch(
         "cancelled",
       ];
 
-      // ==========================================
-      // VALIDATE STATUS
-      // ==========================================
-
       if (
         !allowedStatuses.includes(
           status
@@ -1405,10 +1766,6 @@ router.patch(
             "Invalid order status.",
         });
       }
-
-      // ==========================================
-      // UPDATE ORDER
-      // ==========================================
 
       const {
         data,
@@ -1438,8 +1795,6 @@ router.patch(
           status: "error",
           message:
             "Unable to update order status.",
-          database_error:
-            error.message,
         });
       }
 
@@ -1449,8 +1804,7 @@ router.patch(
         message:
           "Order status updated.",
 
-        order:
-          data,
+        order: data,
       });
     } catch (error) {
       console.error(
@@ -1464,6 +1818,67 @@ router.patch(
           "Server error while updating order.",
       });
     }
+  }
+);
+
+// ============================================================
+// SERVICES
+// ============================================================
+
+router.get(
+  "/services",
+  async (req, res) => {
+    try {
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("services")
+        .select("*")
+        .eq("active", true)
+        .order("created_at", {
+          ascending: true,
+        });
+
+      if (error) {
+        return res.status(500).json({
+          status: "error",
+          message:
+            "Unable to load services.",
+        });
+      }
+
+      return res.json({
+        status: "ok",
+        services: data || [],
+      });
+    } catch (error) {
+      console.error(
+        "Services error:",
+        error
+      );
+
+      return res.status(500).json({
+        status: "error",
+        message:
+          "Server error.",
+      });
+    }
+  }
+);
+
+// ============================================================
+// TEST
+// ============================================================
+
+router.get(
+  "/test",
+  (req, res) => {
+    return res.json({
+      status: "ok",
+      message:
+        "Order route is working",
+    });
   }
 );
 
