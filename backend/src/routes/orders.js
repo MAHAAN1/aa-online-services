@@ -129,7 +129,7 @@ const getServiceName = (
 
 const getPdfPageCount = async (buffer) => {
   const pdf = await PDFDocument.load(buffer, {
-    ignoreEncryption: true,
+    ignoreEncryption: false,
   });
 
   return pdf.getPageCount();
@@ -138,7 +138,8 @@ const getPdfPageCount = async (buffer) => {
 const getDocxPageCount = (buffer) => {
   try {
     const files = unzipSync(
-      new Uint8Array(buffer)
+      new Uint8Array(buffer),
+      { filter: entry => entry.name === "docProps/app.xml" && entry.originalSize <= 65536 }
     );
 
     const appXml =
@@ -1015,6 +1016,7 @@ router.post(
   ),
   async (req, res) => {
     const uploadedPaths = [];
+    let createdOrderId;
 
     try {
       const {
@@ -1390,9 +1392,8 @@ router.post(
         .select()
         .single();
 
-      if (orderError) {
-        throw orderError;
-      }
+      if (orderError) throw orderError;
+      createdOrderId = order.id;
 
       // --------------------------------------------------------
       // SAVE COMPLETE DOCUMENT ROWS
@@ -1535,6 +1536,10 @@ router.post(
       // CLEANUP STORAGE
       // --------------------------------------------------------
 
+      if (createdOrderId) {
+        const { error: cleanupError } = await supabase.from("orders").delete().eq("id", createdOrderId);
+        if (cleanupError) console.error("Incomplete order cleanup", cleanupError.code);
+      }
       if (
         uploadedPaths.length > 0
       ) {
@@ -1555,8 +1560,7 @@ router.post(
       return res.status(500).json({
         status: "error",
         message:
-          error?.message ||
-          "Unable to create order.",
+          "Unable to create order. Check your file format and try again.",
       });
     }
   }
@@ -1633,14 +1637,14 @@ router.use(
 // TRACK ORDER
 // ============================================================
 
-router.get(
-  "/track",
-  async (req, res) => {
+router.route("/track").get(track).post(track);
+async function track(req, res) {
+  res.set("Cache-Control", "no-store");
     try {
       const {
         order_number,
         phone,
-      } = req.query;
+      } = req.method === "POST" ? req.body || {} : req.query;
 
       if (
         !order_number ||
@@ -1659,10 +1663,7 @@ router.get(
       } = await supabase
         .from("orders")
         .select(`
-          id,
           order_number,
-          customer_name,
-          phone,
           service,
           copies,
           color_mode,
@@ -1671,8 +1672,6 @@ router.get(
           amount,
           payment_status,
           paid_amount,
-          razorpay_order_id,
-          razorpay_payment_id,
           paid_at,
           created_at,
           updated_at
@@ -1726,7 +1725,7 @@ router.get(
       });
     }
   }
-);
+
 
 // ============================================================
 // ADMIN - UPDATE ORDER STATUS

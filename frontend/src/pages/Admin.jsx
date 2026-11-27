@@ -18,19 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 
-const RAW_API_URL =
-  import.meta.env.VITE_API_URL ||
-  "http://127.0.0.1:5000/api";
-
-const API_URL = (() => {
-  const value = RAW_API_URL.replace(/\/+$/, "");
-
-  if (/\/api$/i.test(value)) {
-    return value;
-  }
-
-  return `${value}/api`;
-})();
+import { apiFetch, apiBase as API_URL } from "../lib/apiBase";
 
 const ORDER_STATUSES = [
   "received",
@@ -126,11 +114,12 @@ const getDocuments = (
 };
 
 export default function Admin() {
-  const [authenticated, setAuthenticated] =
-    useState(false);
-
-  const [admin, setAdmin] =
-    useState(null);
+  const [admin] = useState(() => {
+    if (!sessionStorage.getItem("aa_admin_token")) return null;
+    try { return JSON.parse(sessionStorage.getItem("aa_admin")); }
+    catch { return null; }
+  });
+  const authenticated = Boolean(admin);
 
   const [tab, setTab] =
     useState("orders");
@@ -169,41 +158,8 @@ export default function Admin() {
     useState(null);
 
   useEffect(() => {
-    const savedAdmin =
-      sessionStorage.getItem(
-        "aa_admin"
-      );
-
-    const token =
-      sessionStorage.getItem(
-        "aa_admin_token"
-      );
-
-    if (!savedAdmin || !token) {
-      window.location.href =
-        "/admin/login";
-      return;
-    }
-
-    try {
-      const parsed =
-        JSON.parse(savedAdmin);
-
-      setAdmin(parsed);
-      setAuthenticated(true);
-    } catch {
-      sessionStorage.removeItem(
-        "aa_admin"
-      );
-
-      sessionStorage.removeItem(
-        "aa_admin_token"
-      );
-
-      window.location.href =
-        "/admin/login";
-    }
-  }, []);
+    if (!authenticated) window.location.replace("/admin/login");
+  }, [authenticated]);
 
   const handleUnauthorized = useCallback(
     () => {
@@ -233,7 +189,7 @@ export default function Admin() {
           );
 
           const response =
-            await fetch(
+            await apiFetch(
               `${API_URL}/orders/admin/${orderId}/documents`,
               {
                 method: "GET",
@@ -337,7 +293,7 @@ export default function Admin() {
           ordersResponse,
           enquiriesResponse,
         ] = await Promise.all([
-          fetch(
+          apiFetch(
             `${API_URL}/orders/admin/all`,
             {
               method: "GET",
@@ -346,7 +302,7 @@ export default function Admin() {
             }
           ),
 
-          fetch(
+          apiFetch(
             `${API_URL}/enquiries/admin/all`,
             {
               method: "GET",
@@ -456,7 +412,8 @@ export default function Admin() {
 
   useEffect(() => {
     if (authenticated) {
-      loadData();
+      const timer = setTimeout(loadData, 0);
+      return () => clearTimeout(timer);
     }
   }, [
     authenticated,
@@ -474,7 +431,7 @@ export default function Admin() {
         );
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/orders/admin/${orderId}/status`,
             {
               method: "PATCH",
@@ -550,7 +507,7 @@ export default function Admin() {
         );
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/enquiries/admin/${enquiryId}`,
             {
               method: "PATCH",
@@ -640,7 +597,7 @@ export default function Admin() {
         }
 
         const response =
-          await fetch(
+          await apiFetch(
             endpoint,
             {
               method: "GET",

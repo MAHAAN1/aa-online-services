@@ -13,9 +13,7 @@ import {
   XCircle,
 } from "lucide-react";
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  "http://127.0.0.1:5000/api";
+import { apiFetch, apiBase as API_URL } from "../lib/apiBase";
 
 const STATUS_STEPS = [
   {
@@ -154,7 +152,7 @@ export default function TrackOrder() {
   const [
     orderNumber,
     setOrderNumber,
-  ] = useState("");
+  ] = useState(() => new URLSearchParams(window.location.search).get("order") || "");
 
   const [
     phone,
@@ -211,17 +209,13 @@ export default function TrackOrder() {
     try {
       setLoading(true);
 
-      const params =
-        new URLSearchParams({
-          order_number:
-            cleanOrderNumber,
-          phone: cleanPhone,
-        });
-
-      const response =
-        await fetch(
-          `${API_URL}/orders/track?${params.toString()}`
-        );
+      const ref = cleanOrderNumber.toUpperCase();
+      const type = ref.startsWith("ENQ-") ? "enquiries" : ref.startsWith("AA-APP-") ? "applications" : "orders";
+      const key = type === "enquiries" ? "enquiry_number" : "order_number";
+      const response = await apiFetch(API_URL + "/" + type + "/track", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: ref, phone: cleanPhone }),
+      });
 
       let data;
 
@@ -243,13 +237,17 @@ export default function TrackOrder() {
         );
       }
 
+      if (data.enquiry) {
+        setOrder({ enquiry: data.enquiry });
+        return;
+      }
       if (!data?.order) {
         throw new Error(
           "Order information was not returned by the server."
         );
       }
 
-      setOrder(data.order);
+      setOrder({ ...data.order, application: data.application });
     } catch (err) {
       console.error(
         "Track order error:",
@@ -265,6 +263,10 @@ export default function TrackOrder() {
     }
   };
 
+  if (order?.enquiry) {
+    const enquiry = order.enquiry;
+    return <main className="mx-auto max-w-xl p-6 text-white"><h1 className="text-3xl font-bold">Enquiry status</h1><p className="mt-4">{enquiry.enquiry_number} · {enquiry.status}</p><p className="mt-3">{enquiry.subject}</p><p className="mt-3">{enquiry.admin_reply || "The desk has not replied yet."}</p><button className="my-6 underline" onClick={() => setOrder(null)}>Track another request</button></main>;
+  }
   const currentIndex = order
     ? getStatusIndex(
         order.status
@@ -338,7 +340,7 @@ export default function TrackOrder() {
           </div>
 
           <h1 className="text-4xl font-black tracking-tight sm:text-6xl">
-            Track your order.
+            Track your request.
           </h1>
 
           <p className="mt-4 max-w-2xl text-base leading-7 text-white/45">
@@ -486,7 +488,7 @@ export default function TrackOrder() {
                   </p>
 
                   <h2 className="mt-2 break-all text-2xl font-black sm:text-3xl">
-                    {order.order_number}
+                    {order.order_number} {order.application && <small> · {order.application.application_status?.replaceAll("_", " ")}</small>}
                   </h2>
 
                   <p className="mt-2 text-sm text-white/40">

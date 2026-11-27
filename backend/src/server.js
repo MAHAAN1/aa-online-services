@@ -68,8 +68,7 @@ const configuredOrigins = (
   .filter(Boolean);
 
 const allowedOrigins =
-  configuredOrigins.length >
-  0
+  isProduction || configuredOrigins.length > 0
     ? configuredOrigins
     : developmentOrigins;
 
@@ -159,6 +158,8 @@ app.use(
 /* ============================================================
    BODY PARSERS
 ============================================================ */
+
+app.use("/api/payments/webhook", express.raw({ type: "application/json", limit: "1mb" }));
 
 app.use(
   express.json({
@@ -328,10 +329,7 @@ app.get(
     });
   }
 );
-app.use(
-  "/api/applications",
-  applicationsRouter
-);
+
 /* ============================================================
    HEALTH
 ============================================================ */
@@ -366,6 +364,11 @@ app.use(
 /* ============================================================
    ADMIN LOGIN
 ============================================================ */
+
+app.use(
+  "/api/applications",
+  applicationsRouter
+);
 
 app.use(
   "/api/admin/login",

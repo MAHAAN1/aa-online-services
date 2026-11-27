@@ -1,3 +1,5 @@
+import { Link, useSearchParams } from "react-router-dom";
+import { calculateDocumentPrice } from "../lib/printPricing";
 import {
   useMemo,
   useRef,
@@ -18,9 +20,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  "http://127.0.0.1:5000/api";
+import { apiFetch, apiBase as API_URL } from "../lib/apiBase";
 
 const MAX_FILES = 20;
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -59,30 +59,6 @@ const ALLOWED_EXTENSIONS =
      First page = ₹10
      Additional = ₹6
 */
-
-const PRINT_PRICE = {
-  bw: {
-    single: 2,
-    double: 3,
-  },
-
-  color: {
-    single: 5,
-    double: 8,
-  },
-};
-
-const XEROX_PRICE = {
-  bw: {
-    firstPage: 5,
-    additionalPage: 3,
-  },
-
-  color: {
-    firstPage: 10,
-    additionalPage: 6,
-  },
-};
 
 const LAMINATION_PRICE = 20;
 const SPIRAL_PRICE = 40;
@@ -127,141 +103,6 @@ const getServiceName = (
 /* ============================================================
    PRINT PRICE CALCULATION
 ============================================================ */
-
-const calculatePrintingPrice = (
-  pages,
-  copies,
-  colorMode,
-  sides
-) => {
-  pages = Number(pages);
-  copies = Math.max(
-    1,
-    Number(copies) || 1
-  );
-
-  if (
-    !Number.isFinite(pages) ||
-    pages < 1
-  ) {
-    return 0;
-  }
-
-  const rates =
-    PRINT_PRICE[colorMode] ||
-    PRINT_PRICE.bw;
-
-  if (sides === "double") {
-    /*
-      Example:
-
-      1 page  = ₹2
-      2 pages = ₹3
-      3 pages = ₹3 + ₹2 = ₹5
-      4 pages = ₹3 + ₹3 = ₹6
-      5 pages = ₹3 + ₹3 + ₹2 = ₹8
-    */
-
-    const doubleSheets =
-      Math.floor(pages / 2);
-
-    const singlePage =
-      pages % 2;
-
-    return (
-      doubleSheets *
-        rates.double +
-      singlePage *
-        rates.single
-    ) * copies;
-  }
-
-  return (
-    pages *
-    rates.single *
-    copies
-  );
-};
-
-/* ============================================================
-   XEROX PRICE CALCULATION
-============================================================ */
-
-const calculateXeroxPrice = (
-  pages,
-  copies,
-  colorMode
-) => {
-  pages = Number(pages);
-
-  copies = Math.max(
-    1,
-    Number(copies) || 1
-  );
-
-  if (
-    !Number.isFinite(pages) ||
-    pages < 1
-  ) {
-    return 0;
-  }
-
-  const rates =
-    XEROX_PRICE[colorMode] ||
-    XEROX_PRICE.bw;
-
-  const pricePerCopy =
-    rates.firstPage +
-    Math.max(
-      0,
-      pages - 1
-    ) *
-      rates.additionalPage;
-
-  return pricePerCopy * copies;
-};
-
-/* ============================================================
-   COMPLETE DOCUMENT PRICE
-============================================================ */
-
-const calculateDocumentPrice = (
-  document
-) => {
-  const pages = Number(
-    document.pages
-  );
-
-  const copies = Math.max(
-    1,
-    Number(document.copies) || 1
-  );
-
-  if (
-    !Number.isFinite(pages) ||
-    pages < 1
-  ) {
-    return 0;
-  }
-
-  if (
-    document.service_type ===
-    "xerox"
-  ) {
-    return calculateXeroxPrice(
-      pages,
-      copies,
-      document.color_mode
-    );
-  }
-
-  return calculatePrintingPrice(
-    pages,
-    copies,
-    document.color_mode,
-    document.sides
-  );
-};
 
 /* ============================================================
    RAZORPAY SCRIPT
@@ -374,7 +215,7 @@ const createPaymentOrder = async (
   orderId
 ) => {
   const response =
-    await fetch(
+    await apiFetch(
       `${API_URL}/payments/create`,
       {
         method: "POST",
@@ -399,7 +240,7 @@ const verifyPayment = async (
   payload
 ) => {
   const response =
-    await fetch(
+    await apiFetch(
       `${API_URL}/payments/verify`,
       {
         method: "POST",
@@ -425,6 +266,12 @@ const verifyPayment = async (
 ============================================================ */
 
 export default function PrintOrder() {
+  const [params] = useSearchParams();
+  const defaultService = params.get("service") === "xerox" ? "xerox" : "printing";
+  const defaultMode = params.get("colour") === "color" ? "color" : "bw";
+  const defaultSides = defaultService === "printing" && params.get("sides") === "double" ? "double" : "single";
+  const [savedOrder, setSavedOrder] = useState(null);
+
   const fileInputRef =
     useRef(null);
 
@@ -556,15 +403,13 @@ export default function PrintOrder() {
         page_count_status:
           "pending_backend",
 
-        service_type:
-          "printing",
+        service_type: defaultService,
 
-        service_name:
-          "B&W Printing",
+        service_name: getServiceName(defaultMode, defaultService),
 
-        color_mode: "bw",
+        color_mode: defaultMode,
 
-        sides: "single",
+        sides: defaultSides,
 
         copies: 1,
       });
@@ -1127,7 +972,7 @@ export default function PrintOrder() {
       );
 
       const response =
-        await fetch(
+        await apiFetch(
           `${API_URL}/orders/create`,
           {
             method: "POST",
@@ -1149,11 +994,8 @@ export default function PrintOrder() {
         );
       }
 
+      setSavedOrder(internalOrder);
       setSubmitting(false);
-
-      await openRazorpayCheckout(
-        internalOrder
-      );
     } catch (requestError) {
       console.error(
         "Order creation error:",
@@ -1188,97 +1030,21 @@ export default function PrintOrder() {
 
         {/* HEADER */}
 
-        <header className="mb-10">
-          <div className="flex items-center gap-3">
-
-            <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-slate-200">
-              <img
-                src="/logo.png"
-                alt="A&A Online Services"
-                className="h-full w-full object-contain"
-              />
-            </div>
-
-            <div>
-              <p className="text-sm font-bold">
-                A&A Online Services
-              </p>
-
-              <p className="text-xs text-slate-400">
-                Digital Service & Printing Center
-              </p>
-            </div>
-
-          </div>
-
-          <h1 className="mt-7 text-4xl font-black tracking-tight md:text-6xl">
-            Print smarter.
-            <br />
-            Pay only for what you print.
-          </h1>
-
-          <p className="mt-4 max-w-3xl text-base leading-7 text-slate-500 md:text-lg">
-            Upload multiple documents,
-            choose different options for
-            every file, and get secure
-            server-calculated pricing.
-          </p>
+        <header className="desk-page-intro">
+          <Link to="/">← Service desk</Link>
+          <h1>Print &amp; Xerox</h1>
+          <p>Upload your files, choose the options for each document, then review the confirmed price before paying.</p>
         </header>
-
-        {/* PRINT PRICES */}
-
-        <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-
-          {[
-            ["B&W Single", "₹2 / page"],
-            ["B&W Double", "₹3 / 2-sided sheet"],
-            ["Colour Single", "₹5 / page"],
-            ["Colour Double", "₹8 / 2-sided sheet"],
-          ].map(
-            ([title, value]) => (
-              <div
-                key={title}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-              >
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  {title}
-                </p>
-
-                <p className="mt-1 text-xl font-black">
-                  {value}
-                </p>
-              </div>
-            )
-          )}
-
-        </div>
-
-        {/* XEROX PRICES */}
-
-        <div className="mb-8 grid gap-3 md:grid-cols-2">
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              B&W Xerox
-            </p>
-
-            <p className="mt-1 font-black">
-              ₹5 first page + ₹3 each additional page
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Colour Xerox
-            </p>
-
-            <p className="mt-1 font-black">
-              ₹10 first page + ₹6 each additional page
-            </p>
-          </div>
-
-        </div>
-
+        <details className="desk-rates"><summary>View print and Xerox rates</summary>
+          <p>Black &amp; white print: ₹2 per side or ₹3 per two-sided sheet. Colour: ₹5 or ₹8 respectively. An odd final page uses the single-side rate.</p>
+          <p>Black &amp; white Xerox: ₹5 for the first page and ₹3 per additional page. Colour Xerox: ₹10 then ₹6.</p>
+        </details>
+        {savedOrder && !success && <section className="desk-receipt" aria-label="Order receipt">
+          <h2>Order saved</h2><p>Keep <strong>{savedOrder.order_number}</strong> to track this order with your phone number.</p>
+          <p>Confirmed total <strong>{formatCurrency(savedOrder.amount)}</strong></p>
+          <button type="button" disabled={paymentLoading} onClick={() => openRazorpayCheckout(savedOrder)}>{paymentLoading ? "Opening checkout…" : "Pay securely"}</button>
+          <Link to={"/track?order=" + encodeURIComponent(savedOrder.order_number)}>Track order</Link>
+        </section>}
         {/* SUCCESS */}
 
         {success && (
@@ -1388,7 +1154,7 @@ export default function PrintOrder() {
           </div>
         )}
 
-        <form onSubmit={submitOrder}>
+        {!savedOrder && <form onSubmit={submitOrder}>
 
           <div className="grid gap-6 lg:grid-cols-[1.5fr_0.8fr]">
 
@@ -2108,7 +1874,7 @@ export default function PrintOrder() {
                   </>
                 ) : (
                   <>
-                    Continue to payment
+                    Save order & review price
                     <ArrowRight className="h-4 w-4" />
                   </>
                 )}
@@ -2125,7 +1891,7 @@ export default function PrintOrder() {
 
           </div>
 
-        </form>
+        </form>}
 
       </div>
 

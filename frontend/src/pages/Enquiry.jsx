@@ -9,9 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  "http://127.0.0.1:5000/api";
+import { apiFetch, apiBase as API_URL } from "../lib/apiBase";
 
 const CATEGORIES = [
   "Applications",
@@ -147,7 +145,7 @@ export default function Enquiry() {
       setLoading(true);
 
       const response =
-        await fetch(
+        await apiFetch(
           `${API_URL}/enquiries`,
           {
             method: "POST",
