@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -10,9 +10,7 @@ import {
   X,
 } from "lucide-react";
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  "http://127.0.0.1:5000/api";
+import { apiFetch, apiBase as API_URL } from "../lib/apiBase";
 
 const MAX_FILES = 20;
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -137,16 +135,7 @@ export default function Application() {
       [opportunity]
     );
 
-  const governmentFee = Math.max(
-    0,
-    Number(
-      opportunity?.government_fee ??
-        opportunity?.application_fee ??
-        opportunity?.fee ??
-        0
-    ) || 0
-  );
-
+  const governmentFee = 0;
   const serviceFee = 100;
 
   const totalAmount =
@@ -365,7 +354,7 @@ export default function Application() {
         */
 
         const paymentResponse =
-          await fetch(
+          await apiFetch(
             `${API_URL}/orders/payment/create`,
             {
               method: "POST",
@@ -494,7 +483,7 @@ export default function Application() {
                 */
 
                 const verificationResponse =
-                  await fetch(
+                  await apiFetch(
                     `${API_URL}/orders/verify`,
                     {
                       method: "POST",
@@ -805,7 +794,7 @@ export default function Application() {
         );
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API_URL}/applications/create`,
             {
               method: "POST",
@@ -837,9 +826,7 @@ export default function Application() {
         |--------------------------------------------------------------------------
         */
 
-        await openRazorpayCheckout(
-          data.order
-        );
+
       } catch (err) {
         console.error(
           "Application submission error:",
@@ -1095,7 +1082,7 @@ export default function Application() {
 
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                    Government Fee
+                    Government fee collected here (official fees separate)
                   </p>
 
                   <p className="mt-1 font-black text-slate-900">
@@ -1379,7 +1366,7 @@ export default function Application() {
 
                 <div className="flex justify-between gap-4 text-sm">
                   <span className="text-slate-500">
-                    Government Fee
+                    Government fee collected here (official fees separate)
                   </span>
 
                   <span className="font-bold text-slate-900">
@@ -1421,6 +1408,7 @@ export default function Application() {
                 </div>
               )}
 
+              {submittedOrder && <p role="status" className="mt-4 rounded-xl bg-green-50 p-4 text-green-900">Application saved. Keep your reference <strong>{submittedOrder.order.order_number}</strong> for tracking.</p>}
               {paymentError && (
                 <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
                   {paymentError}
@@ -1435,7 +1423,7 @@ export default function Application() {
                   !documents.length
                 }
                 onClick={
-                  submitApplication
+                  submittedOrder ? () => openRazorpayCheckout(submittedOrder.order) : submitApplication
                 }
                 className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-5 py-4 font-black text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -1453,7 +1441,7 @@ export default function Application() {
                   </>
                 ) : (
                   <>
-                    Continue to Payment
+                    {submittedOrder ? "Pay for saved application" : "Save application"}
                     <ArrowRight size={18} />
                   </>
                 )}

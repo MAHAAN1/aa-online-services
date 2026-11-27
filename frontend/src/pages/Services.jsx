@@ -15,7 +15,7 @@ import {
   FileCheck2,
   FileText,
   GraduationCap,
-  LoaderCircle,
+
   Plane,
   Printer,
   RefreshCw,
@@ -25,9 +25,7 @@ import {
   X,
 } from "lucide-react";
 
-const API =
-  import.meta.env.VITE_API_URL ||
-  "http://127.0.0.1:5000/api";
+import { apiFetch, apiBase as API } from "../lib/apiBase";
 
 const serviceIcons = {
   printing: Printer,
@@ -749,7 +747,7 @@ export default function Services() {
         setError("");
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API}/orders/services`
           );
 
@@ -811,7 +809,7 @@ export default function Services() {
         );
 
         const response =
-          await fetch(
+          await apiFetch(
             `${API}/opportunities`
           );
 
@@ -911,7 +909,8 @@ export default function Services() {
   }, []);
 
   useEffect(() => {
-    fetchOpportunities();
+    const timer = setTimeout(fetchOpportunities, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   const filteredServices =
@@ -965,20 +964,6 @@ export default function Services() {
         "all"
       );
     };
-
-  const telanganaJobs =
-    opportunities.jobs.filter(
-      (job) =>
-        job.region ===
-        "Telangana"
-    );
-
-  const sscJobs =
-    opportunities.jobs.filter(
-      (job) =>
-        job.organization ===
-        "Staff Selection Commission"
-    );
 
   return (
     <div className="min-h-screen overflow-x-hidden text-white">
@@ -1599,6 +1584,16 @@ export default function Services() {
                 </span>
               </div>
             </div>
+          </div>
+          {opportunitiesLoading && <p role="status">Loading current notices…</p>}
+          {opportunitiesError && <p role="status">{opportunitiesError}</p>}
+          {updatedAt && <p className="mt-3 text-sm">Last checked {new Date(updatedAt).toLocaleString("en-IN")}</p>}
+          <div className="mt-4 grid gap-4">
+            {[...opportunities.jobs, ...opportunities.scholarships].map(item => {
+              const key = item.id || item.source_url || item.title;
+              return <div key={key}><OpportunityCard item={item} expanded={openId === key} onToggle={() => setOpenId(openId === key ? null : key)} />
+                {item.status !== "closed" && <Link className="inline-block rounded-lg bg-emerald-100 px-4 py-2 font-semibold text-emerald-950" to="/application" state={{ opportunity: item }}>Request application assistance</Link>}</div>;
+            })}
           </div>
         </section>
 

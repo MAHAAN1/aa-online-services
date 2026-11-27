@@ -16,6 +16,7 @@ import AdminLogin from "./pages/AdminLogin";
 export default function App() {
   return (
     <BrowserRouter>
+      {import.meta.env.VITE_API_PENDING && <div role="status" className="relative z-[60] bg-amber-100 px-4 py-2 text-center text-sm font-semibold text-amber-950">Design preview · uploads, payments and staff data require a connected test API. Use sample files only.</div>}
       <Routes>
         {/* CUSTOMER */}
         <Route

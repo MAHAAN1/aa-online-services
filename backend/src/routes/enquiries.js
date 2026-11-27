@@ -142,12 +142,14 @@ router.post("/", async (req, res) => {
 // PUBLIC
 // ==========================================
 
-router.get("/track", async (req, res) => {
+router.route("/track").get(track).post(track);
+async function track(req, res) {
+  res.set("Cache-Control", "no-store");
   try {
     const {
       enquiry_number,
       phone,
-    } = req.query;
+    } = req.method === "POST" ? req.body || {} : req.query;
 
     if (
       !enquiry_number ||
@@ -166,14 +168,9 @@ router.get("/track", async (req, res) => {
     } = await supabase
       .from("enquiries")
       .select(`
-        id,
         enquiry_number,
-        customer_name,
-        phone,
-        email,
         category,
         subject,
-        message,
         status,
         admin_reply,
         created_at,
@@ -226,7 +223,7 @@ router.get("/track", async (req, res) => {
         "Server error while tracking enquiry.",
     });
   }
-});
+}
 
 // ==========================================
 // ADMIN AUTHENTICATION

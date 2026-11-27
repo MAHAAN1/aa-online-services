@@ -51,13 +51,6 @@ const APPLICATION_STATUSES = [
   "cancelled",
 ];
 
-const normalizeNumber = (value, fallback = 0) => {
-  const number = Number(value);
-
-  return Number.isFinite(number)
-    ? number
-    : fallback;
-};
 
 const clean = (value) =>
   typeof value === "string"
@@ -83,6 +76,7 @@ router.post(
   upload.array("documents", MAX_FILES),
   async (req, res) => {
     const uploadedPaths = [];
+    let createdOrderId;
 
     try {
       const {
@@ -98,8 +92,7 @@ router.post(
         application_start_date,
         application_end_date,
 
-        government_fee = 0,
-        service_fee = 100,
+
 
         customer_details = "{}",
         document_requirements = "[]",
@@ -230,22 +223,9 @@ router.post(
       |--------------------------------------------------------------------------
       */
 
-      const governmentFeeValue =
-        Math.max(
-          0,
-          normalizeNumber(
-            government_fee
-          )
-        );
-
-      const serviceFeeValue =
-        Math.max(
-          0,
-          normalizeNumber(
-            service_fee,
-            100
-          )
-        );
+      // Collect only the published desk charge. Official fees are settled separately.
+      const governmentFeeValue = 0;
+      const serviceFeeValue = 100;
 
       const totalAmount =
         governmentFeeValue +
@@ -395,9 +375,8 @@ router.post(
         .select()
         .single();
 
-      if (orderError) {
-        throw orderError;
-      }
+      if (orderError) throw orderError;
+      createdOrderId = order.id;
 
       /*
       |--------------------------------------------------------------------------
@@ -550,6 +529,10 @@ router.post(
       |--------------------------------------------------------------------------
       */
 
+      if (createdOrderId) {
+        const { error: cleanupError } = await supabase.from("orders").delete().eq("id", createdOrderId);
+        if (cleanupError) console.error("Incomplete application cleanup", cleanupError.code);
+      }
       if (uploadedPaths.length) {
         try {
           await supabase.storage
@@ -566,7 +549,6 @@ router.post(
       return res.status(500).json({
         status: "error",
         message:
-          error?.message ||
           "Unable to create application.",
       });
     }
@@ -580,14 +562,14 @@ router.post(
 |--------------------------------------------------------------------------
 */
 
-router.get(
-  "/track",
-  async (req, res) => {
+router.route("/track").get(track).post(track);
+async function track(req, res) {
+  res.set("Cache-Control", "no-store");
     try {
       const {
         order_number,
         phone,
-      } = req.query;
+      } = req.method === "POST" ? req.body || {} : req.query;
 
       if (
         !order_number ||
@@ -605,7 +587,7 @@ router.get(
         error: orderError,
       } = await supabase
         .from("orders")
-        .select("*")
+        .select("id,order_number,service,status,amount,payment_status,created_at,updated_at")
         .eq(
           "order_number",
           String(order_number).trim()
@@ -634,7 +616,7 @@ router.get(
           applicationError,
       } = await supabase
         .from("service_applications")
-        .select("*")
+        .select("application_type,application_name,application_status,government_fee,service_fee,total_amount")
         .eq(
           "order_id",
           order.id
@@ -652,10 +634,8 @@ router.get(
       } = await supabase
         .from("order_documents")
         .select(`
-          id,
-          original_name,
-          file_type,
-          file_size,
+
+
           required_document_name,
           document_category,
           is_application_document,
@@ -683,7 +663,7 @@ router.get(
       return res.json({
         status: "ok",
 
-        order,
+        order: { order_number: order.order_number, service: order.service, status: order.status, amount: order.amount, payment_status: order.payment_status, created_at: order.created_at, updated_at: order.updated_at },
 
         application,
 
@@ -704,7 +684,7 @@ router.get(
       });
     }
   }
-);
+
 
 
 /*

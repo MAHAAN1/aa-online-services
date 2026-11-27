@@ -17,15 +17,13 @@ const WEBHOOK_SECRET =
 
 const PAYMENT_CURRENCY = "INR";
 
-if (!KEY_ID || !KEY_SECRET) {
-  throw new Error(
-    "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are required."
-  );
-}
+const razorpay = KEY_ID && KEY_SECRET
+  ? new Razorpay({ key_id: KEY_ID, key_secret: KEY_SECRET })
+  : null;
 
-const razorpay = new Razorpay({
-  key_id: KEY_ID,
-  key_secret: KEY_SECRET,
+router.use(["/create", "/verify"], (req, res, next) => {
+  if (razorpay) return next();
+  return res.status(503).json({ status: "error", message: "Online payment is unavailable. Keep your order number and contact the desk." });
 });
 
 // ======================================================
@@ -1217,7 +1215,7 @@ router.post(
               .eq(
                 "id",
                 internalOrderId
-              );
+              ).neq("payment_status", "paid");
 
           if (
             updateError
@@ -1252,7 +1250,7 @@ router.post(
               .eq(
                 "order_number",
                 orderNumber
-              );
+              ).neq("payment_status", "paid");
 
           if (
             updateError
